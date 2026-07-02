@@ -1,0 +1,57 @@
+name: Cloud Download
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL or search query'
+        required: true
+        type: string
+      mode:
+        description: 'audio | video | file'
+        required: true
+        default: 'audio'
+        type: choice
+        options:
+          - audio
+          - video
+          - file
+
+jobs:
+  download-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install yt-dlp
+        run: sudo pip install -q yt-dlp
+
+      - name: Download file
+        run: |
+          URL="${{ inputs.url }}"
+          MODE="${{ inputs.mode }}"
+          if [ "$MODE" = "audio" ]; then
+            yt-dlp -x --audio-format mp3 --audio-quality 0 -o "output.%(ext)s" --no-warnings "$URL"
+          elif [ "$MODE" = "video" ]; then
+            yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" -o "output.%(ext)s" --no-warnings "$URL"
+          else
+            yt-dlp -o "output.%(ext)s" --no-warnings "$URL"
+          fi
+          echo "FILE=$(ls output.*)" >> $GITHUB_ENV
+
+      - name: Send to Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          FILE="${{ env.FILE }}"
+          [[ -z "$FILE" ]] && { echo "No file found"; exit 1; }
+          EXT="${FILE##*.}"
+          if [[ "$EXT" == "mp3" || "$EXT" == "ogg" || "$EXT" == "m4a" || "$EXT" == "flac" || "$EXT" == "wav" ]]; then
+            METHOD="sendAudio"; FIELD="audio"
+          elif [[ "$EXT" == "mp4" || "$EXT" == "mkv" || "$EXT" == "webm" ]]; then
+            METHOD="sendVideo"; FIELD="video"
+          elif [[ "$EXT" == "jpg" || "$EXT" == "jpeg" || "$EXT" == "png" || "$EXT" == "gif" ]]; then
+            METHOD="sendPhoto"; FIELD="photo"
+          else
+            METHOD="sendDocument"; FIELD="document"
+          fi
+          curl -s -F "$FIELD=@$FILE" -F "chat_id=$CHAT_ID" "https://api.telegram.org/bot$BOT_TOKEN/$METHOD" | jq .
