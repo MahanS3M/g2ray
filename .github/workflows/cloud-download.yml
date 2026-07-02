@@ -16,6 +16,10 @@ on:
           - audio
           - video
           - file
+      filename:
+        description: 'Custom filename (optional)'
+        required: false
+        type: string
 
 jobs:
   download-and-send:
@@ -28,6 +32,13 @@ jobs:
         run: |
           URL="${{ inputs.url }}"
           MODE="${{ inputs.mode }}"
+
+          # If not a URL, treat as yt-dlp search
+          if [[ ! "$URL" =~ ^https?:// ]]; then
+            URL="ytsearch:$URL"
+            echo "🔍 Searching: $URL"
+          fi
+
           if [ "$MODE" = "audio" ]; then
             yt-dlp -x --audio-format mp3 --audio-quality 0 -o "output.%(ext)s" --no-warnings "$URL"
           elif [ "$MODE" = "video" ]; then
@@ -43,7 +54,10 @@ jobs:
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           FILE="${{ env.FILE }}"
-          [[ -z "$FILE" ]] && { echo "No file found"; exit 1; }
+          [[ -z "$FILE" ]] && { echo "❌ No file found"; exit 1; }
+          SIZE=$(stat -c%s "$FILE")
+          echo "📁 File: $FILE ($SIZE bytes)"
+
           EXT="${FILE##*.}"
           if [[ "$EXT" == "mp3" || "$EXT" == "ogg" || "$EXT" == "m4a" || "$EXT" == "flac" || "$EXT" == "wav" ]]; then
             METHOD="sendAudio"; FIELD="audio"
@@ -54,4 +68,6 @@ jobs:
           else
             METHOD="sendDocument"; FIELD="document"
           fi
-          curl -s -F "$FIELD=@$FILE" -F "chat_id=$CHAT_ID" "https://api.telegram.org/bot$BOT_TOKEN/$METHOD" | jq .
+
+          echo "📤 Sending to Telegram via $METHOD..."
+          curl -s -F "$FIELD=@$FILE" -F "chat_id=$CHAT_ID" "https://api.telegram.org/bot$BOT_TOKEN/$METHOD" | jq -r '.ok as $ok | if $ok then "✅ Sent! Message ID: \(.result.message_id)" else "❌ Failed: \(.description)" end'
