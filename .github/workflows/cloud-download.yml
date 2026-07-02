@@ -16,14 +16,23 @@ on:
           - audio
           - video
           - file
+      client:
+        description: 'YouTube client: android|web|default'
+        required: false
+        default: 'default'
+        type: choice
+        options:
+          - default
+          - android
+          - web
 
 jobs:
   download-and-send:
     runs-on: ubuntu-latest
     steps:
-      - name: Install yt-dlp + ffmpeg
+      - name: Install deps
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg 2>&1 | tail -3
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg jq 2>&1 | tail -1
           sudo pip install -q yt-dlp
           echo "✅ yt-dlp $(yt-dlp --version) + ffmpeg ready"
 
@@ -31,6 +40,7 @@ jobs:
         run: |
           URL="${{ inputs.url }}"
           MODE="${{ inputs.mode }}"
+          CLIENT="${{ inputs.client }}"
 
           # If not a URL, treat as yt-dlp search
           if [[ ! "$URL" =~ ^https?:// ]]; then
@@ -38,12 +48,19 @@ jobs:
             echo "🔍 Searching: $URL"
           fi
 
+          # Build extra args
+          EXTRA=""
+          if [[ "$URL" =~ youtube\.com|youtu\.be ]] && [[ "$CLIENT" != "default" ]]; then
+            EXTRA="--extractor-args youtube:player_client=$CLIENT"
+            echo "📺 YouTube with $CLIENT client"
+          fi
+
           if [ "$MODE" = "audio" ]; then
-            yt-dlp -x --audio-format mp3 --audio-quality 0 -o "output.%(ext)s" --no-warnings "$URL"
+            yt-dlp -x --audio-format mp3 --audio-quality 0 -o "output.%(ext)s" --no-warnings $EXTRA "$URL"
           elif [ "$MODE" = "video" ]; then
-            yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" -o "output.%(ext)s" --no-warnings "$URL"
+            yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" -o "output.%(ext)s" --no-warnings $EXTRA "$URL"
           else
-            yt-dlp -o "output.%(ext)s" --no-warnings "$URL"
+            yt-dlp -o "output.%(ext)s" --no-warnings $EXTRA "$URL"
           fi
           echo "FILE=$(ls output.*)" >> $GITHUB_ENV
 
