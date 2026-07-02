@@ -17,7 +17,7 @@ on:
           - video
           - file
       client:
-        description: 'YouTube client: android|web|default'
+        description: 'YT client override'
         required: false
         default: 'default'
         type: choice
@@ -25,6 +25,7 @@ on:
           - default
           - android
           - web
+          - cobalt
 
 jobs:
   download-and-send:
@@ -32,11 +33,45 @@ jobs:
     steps:
       - name: Install deps
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg jq 2>&1 | tail -1
-          sudo pip install -q yt-dlp
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg jq curl 2>&1 | tail -1
+          sudo pip install -q yt-dlp 2>&1 | tail -1
           echo "✅ yt-dlp $(yt-dlp --version) + ffmpeg ready"
 
-      - name: Download file
+      - name: Download with cobalt API (YouTube bypass)
+        if: inputs.client == 'cobalt'
+        run: |
+          URL="${{ inputs.url }}"
+          MODE="${{ inputs.mode }}"
+          echo "🔄 Using cobalt API (YouTube bypass)..."
+          
+          IS_AUDIO="false"
+          [ "$MODE" = "audio" ] && IS_AUDIO="true"
+          
+          echo "📡 Requesting from cobalt.tools..."
+          RESP=$(curl -s -X POST "https://cobalt.tools/api/json" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -d "{\"url\":\"$URL\",\"videoQuality\":\"1080\",\"filenamePattern\":\"classic\",\"isAudioOnly\":$IS_AUDIO}")
+          
+          echo "📡 Response: $(echo $RESP | jq -c '.')"
+          DOWNLOAD_URL=$(echo $RESP | jq -r '.url // .pickerUrl // empty')
+          FILENAME=$(echo $RESP | jq -r '.filename // "output.mp4"')
+          
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "❌ Cobalt failed, falling back to yt-dlp..."
+            ${{ github.action_path }}/scripts/fallback.sh "$URL" "$MODE"
+            exit 1
+          fi
+          
+          echo "📥 Downloading from cobalt..."
+          curl -L -o "$FILENAME" "$DOWNLOAD_URL"
+          
+          # Check file
+          file "$FILENAME"
+          echo "FILE=$FILENAME" >> $GITHUB_ENV
+
+      - name: Download with yt-dlp (standard)
+        if: inputs.client != 'cobalt'
         run: |
           URL="${{ inputs.url }}"
           MODE="${{ inputs.mode }}"
@@ -48,19 +83,39 @@ jobs:
             echo "🔍 Searching: $URL"
           fi
 
-          # Build extra args
+          # Build extra args for YouTube
           EXTRA=""
           if [[ "$URL" =~ youtube\.com|youtu\.be ]] && [[ "$CLIENT" != "default" ]]; then
-            EXTRA="--extractor-args youtube:player_client=$CLIENT"
-            echo "📺 YouTube with $CLIENT client"
+            EXTRA="--extractor-args youtube:player_client=$CLIENT,youtube:skip=webpage"
+            echo "📺 YouTube with $CLIENT client (skip webpage)"
           fi
 
+          echo "📥 Downloading..."
           if [ "$MODE" = "audio" ]; then
             yt-dlp -x --audio-format mp3 --audio-quality 0 -o "output.%(ext)s" --no-warnings $EXTRA "$URL"
           elif [ "$MODE" = "video" ]; then
-            yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" -o "output.%(ext)s" --no-warnings $EXTRA "$URL"
+            yt-dlp -f "best[ext=mp4]/best" -o "output.%(ext)s" --no-warnings $EXTRA "$URL"
           else
             yt-dlp -o "output.%(ext)s" --no-warnings $EXTRA "$URL"
+          fi
+          echo "FILE=$(ls output.*)" >> $GITHUB_ENV
+
+      - name: Fallback - yt-dlp with cookies workaround
+        if: failure() && inputs.client != 'cobalt'
+        run: |
+          URL="${{ inputs.url }}"
+          MODE="${{ inputs.mode }}"
+          echo "🔄 Attempting fallback with generic headers..."
+          
+          # Try with a different approach - add browser headers
+          if [ "$MODE" = "video" ]; then
+            yt-dlp -f "best[ext=mp4]/best" -o "output.mp4" \
+              --add-header "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36" \
+              --add-header "Accept-Language: en-US,en;q=0.9" \
+              --extractor-args "youtube:player_client=android" \
+              --throttled-rate 100K \
+              --sleep-requests 2 \
+              "$URL"
           fi
           echo "FILE=$(ls output.*)" >> $GITHUB_ENV
 
