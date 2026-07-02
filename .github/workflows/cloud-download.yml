@@ -16,17 +16,16 @@ on:
           - audio
           - video
           - file
-      filename:
-        description: 'Custom filename (optional)'
-        required: false
-        type: string
 
 jobs:
   download-and-send:
     runs-on: ubuntu-latest
     steps:
-      - name: Install yt-dlp
-        run: sudo pip install -q yt-dlp
+      - name: Install yt-dlp + ffmpeg
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg 2>&1 | tail -3
+          sudo pip install -q yt-dlp
+          echo "✅ yt-dlp $(yt-dlp --version) + ffmpeg ready"
 
       - name: Download file
         run: |
@@ -56,7 +55,7 @@ jobs:
           FILE="${{ env.FILE }}"
           [[ -z "$FILE" ]] && { echo "❌ No file found"; exit 1; }
           SIZE=$(stat -c%s "$FILE")
-          echo "📁 File: $FILE ($SIZE bytes)"
+          echo "📁 $FILE ($(numfmt --to=iec $SIZE))"
 
           EXT="${FILE##*.}"
           if [[ "$EXT" == "mp3" || "$EXT" == "ogg" || "$EXT" == "m4a" || "$EXT" == "flac" || "$EXT" == "wav" ]]; then
@@ -69,5 +68,7 @@ jobs:
             METHOD="sendDocument"; FIELD="document"
           fi
 
-          echo "📤 Sending to Telegram via $METHOD..."
-          curl -s -F "$FIELD=@$FILE" -F "chat_id=$CHAT_ID" "https://api.telegram.org/bot$BOT_TOKEN/$METHOD" | jq -r '.ok as $ok | if $ok then "✅ Sent! Message ID: \(.result.message_id)" else "❌ Failed: \(.description)" end'
+          echo "📤 Sending via $METHOD..."
+          curl -s -F "$FIELD=@$FILE" -F "chat_id=$CHAT_ID" \
+            "https://api.telegram.org/bot$BOT_TOKEN/$METHOD" | \
+            jq -r '.ok as $ok | if $ok then "✅ Sent! ID: \(.result.message_id)" else "❌ \(.description)" end'
